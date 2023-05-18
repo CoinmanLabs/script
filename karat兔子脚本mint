@@ -1,0 +1,77 @@
+import random, time, requests, json, decimal
+from web3 import Web3, HTTPProvider
+
+ZksRPC = 'https://mainnet.era.zksync.io'
+web3 = Web3(HTTPProvider(ZksRPC))
+
+def randomSleep(intervalMin, intervalMax):
+    sTime = random.randint(intervalMin, intervalMax)
+    print('karat兔子--随机间隔--等待...', sTime)
+    time.sleep(sTime)
+
+def karat_process(walletAddress, private_key):
+    print(f'karat兔子 开始执行, walletAddress={walletAddress}')
+    try:
+        karat_mint(walletAddress, private_key, random.randint(0, 150))
+    except Exception as ex:
+        print(ex)
+    finally:
+        randomSleep(5, 10)
+
+def karat_mint(walletAddress, private_key, validatorTokenId):
+    url = 'https://api.karatdao.com/network/action'
+    postData = {
+        "method":"claimer/requestMintClaimerSignature",
+        "params":{
+            "walletAddress": walletAddress,
+            "validatorTokenId": validatorTokenId,
+            "lieutenantAddr": "0x0000000000000000000000000000000000000000"
+        }
+    }
+    signResponse = requests.post(url, json=postData)
+    role = signResponse.json().get('result').get('message').get('role')
+    score = signResponse.json().get('result').get('message').get('score')
+    sign = signResponse.json().get('result').get('signedMessage')
+    print(f'role={role},score={score},sign={sign},validatorTokenId={validatorTokenId}')
+    validatorTokenIdHex = Web3.to_hex(validatorTokenId)[2:].zfill(64)
+    requestData = f'0xd221bd26000000000000000000000000{walletAddress[2:]}{validatorTokenIdHex}{Web3.to_hex(score)[2:].zfill(64)}0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000{role}00000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000041{sign[2:]}00000000000000000000000000000000000000000000000000000000000000'
+    tx_hash = {
+        'from': walletAddress,
+        'to': '0x112E5059a4742ad8b2baF9C453fDA8695c200454',
+        'nonce': web3.eth.get_transaction_count(walletAddress),
+        'gasPrice': web3.eth.gas_price,  # 设置gasPrice
+        'value': 0,
+        'gas': 4000000 + random.randint(100000, 200000),  # 设置gas限制
+        "data": requestData,
+        'chainId': 324
+    }
+    # 预估所需的gas
+    gas_estimate = web3.eth.estimate_gas(tx_hash)
+    # 获取预估gas价格
+    gas_price = web3.eth.gas_price
+    gas_fee = gas_estimate * gas_price
+    eth_fee = web3.from_wei(gas_fee, 'ether')
+    print('预估 gas fee: {} ETH'.format(eth_fee))
+    # 私钥导入 这里切记保护好自己的私钥 不要暴露
+    signed_tx = web3.eth.account.sign_transaction(tx_hash, private_key=private_key)
+    tx_hash = web3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    print('交易已发送，交易哈希值：', web3.to_hex(tx_hash))
+
+# 查看该合约最近20条打包交易实际gas 仅供参考
+def getLastTxHashGas():
+    url = f'https://zksync2-mainnet-explorer.zksync.io/transactions?limit=20&direction=older&contractAddress=0x112E5059a4742ad8b2baF9C453fDA8695c200454'
+    rsp = json.loads(requests.get(url).text)
+    data = rsp['list']
+    feeCounts = []
+    for i in data:
+        if i['status'] != "failed":
+            eth_price = decimal.Decimal(i['erc20Transfers'][0]['tokenInfo']['usdPrice'])
+            fee_value = decimal.Decimal(web3.from_wei(int(i['fee'], 16), 'ether'))
+            feeCounts.append(fee_value)
+    averageFee = sum(feeCounts) / len(feeCounts)
+    final_result = (eth_price * averageFee).quantize(decimal.Decimal(".00000001"))
+    print('最近20笔tx平均gas', averageFee, eth_price, f'{final_result}/usdt')
+    return final_result
+
+if __name__ == '__main__':
+    karat_process(Web3.to_checksum_address('钱包地址'), '钱包私钥')
